@@ -11,3 +11,11 @@
 *.lai
 *.la
 *.a
+
+# Unwanted files and folders
+src/Debug
+src/Release
+bin/*
+*.opensdf
+*.suo
+*.sdf
