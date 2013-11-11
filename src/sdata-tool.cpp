@@ -53,6 +53,7 @@ bool hmac_hash_compare(unsigned char *key, int key_len, unsigned char *in, int i
 	{
 		if (out[i] != hash[i])
 		{
+			delete[] out;
 			return false;
 		}
 	}
@@ -74,6 +75,7 @@ bool cmac_hash_compare(unsigned char *key, int key_len, unsigned char *in, int i
 	{
 		if (out[i] != hash[i])
 		{
+			delete[] out;
 			return false;
 		}
 	}
@@ -319,6 +321,9 @@ int sdata_decrypt(FILE *in, FILE *out, SDAT_HEADER *sdat, NPD_HEADER *npd, unsig
 		} else {
 			fwrite(dec_data, pad_lenght, 1, out);
 		}
+		
+		delete[] enc_data;
+		delete[] dec_data;
 	}
 
 	return 0;
