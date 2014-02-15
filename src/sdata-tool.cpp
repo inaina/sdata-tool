@@ -85,19 +85,19 @@ bool cmac_hash_compare(unsigned char *key, int key_len, unsigned char *in, int i
 	return true;
 }
 
-void generate_key(int crypto_mode, unsigned char *key_final, unsigned char *iv_final, unsigned char *key, unsigned char *iv) {
+void generate_key(int crypto_mode, int version, unsigned char *key_final, unsigned char *iv_final, unsigned char *key, unsigned char *iv) {
 	int mode = (int) (crypto_mode & 0xF0000000);
 	switch (mode) {
 	case 0x10000000:
 		// Encrypted ERK.
 		// Decrypt the key with EDAT_KEY + EDAT_IV and copy the original IV.
-		aescbc128_decrypt(EDAT_KEY, EDAT_IV, key, key_final, 0x10);
+		aescbc128_decrypt(version ? EDAT_KEY_1 : EDAT_KEY_0, EDAT_IV, key, key_final, 0x10);
 		memcpy(iv_final, iv, 0x10);
 		break;
 	case 0x20000000:
 		// Default ERK.
 		// Use EDAT_KEY and EDAT_IV.
-		memcpy(key_final, EDAT_KEY, 0x10);
+		memcpy(key_final, version ? EDAT_KEY_1 : EDAT_KEY_0, 0x10);
 		memcpy(iv_final, EDAT_IV, 0x10);
 		break;
 	case 0x00000000:
@@ -109,18 +109,18 @@ void generate_key(int crypto_mode, unsigned char *key_final, unsigned char *iv_f
 	};
 }
 
-void generate_hash(int hash_mode, unsigned char *hash_final, unsigned char *hash) {
+void generate_hash(int hash_mode, int version, unsigned char *hash_final, unsigned char *hash) {
 	int mode = (int) (hash_mode & 0xF0000000);
 	switch (mode) {
 	case 0x10000000:
 		// Encrypted HASH.
 		// Decrypt the hash with EDAT_KEY + EDAT_IV.
-		aescbc128_decrypt(EDAT_KEY, EDAT_IV, hash, hash_final, 0x10);
+		aescbc128_decrypt(version ? EDAT_KEY_1 : EDAT_KEY_0, EDAT_IV, hash, hash_final, 0x10);
 		break;
 	case 0x20000000:
 		// Default HASH.
 		// Use EDAT_HASH.
-		memcpy(hash_final, EDAT_HASH, 0x10);
+		memcpy(hash_final, version ? EDAT_HASH_1 : EDAT_HASH_0, 0x10);
 		break;
 	case 0x00000000:
 		// Unencrypted ERK.
@@ -130,7 +130,7 @@ void generate_hash(int hash_mode, unsigned char *hash_final, unsigned char *hash
 	};
 }
 
-void crypto(int hash_mode, int crypto_mode, unsigned char *in, unsigned char *out, int lenght, unsigned char *key, unsigned char *iv, unsigned char *hash, unsigned char *test_hash) 
+void crypto(int hash_mode, int crypto_mode, int version, unsigned char *in, unsigned char *out, int lenght, unsigned char *key, unsigned char *iv, unsigned char *hash, unsigned char *test_hash) 
 {
 	// Setup buffers for key, iv and hash.
 	unsigned char key_final[0x10] = {};
@@ -138,8 +138,8 @@ void crypto(int hash_mode, int crypto_mode, unsigned char *in, unsigned char *ou
 	unsigned char hash_final[0x10] = {};
 
 	// Generate crypto key and hash.
-	generate_key(crypto_mode, key_final, iv_final, key, iv);
-	generate_hash(hash_mode, hash_final, hash);
+	generate_key(crypto_mode, version, key_final, iv_final, key, iv);
+	generate_hash(hash_mode, version, hash_final, hash);
 
 	if ((crypto_mode & 0xFF) == 0x01)  // No algorithm.
 	{
@@ -912,7 +912,7 @@ int sdata_decrypt(FILE *in, FILE *out, SDAT_HEADER *sdat, NPD_HEADER *npd, unsig
 			// IV is null if NPD version is 1 or 0.
 			iv = (npd->version <= 1) ? empty_iv : npd->digest;
 			// Call main crypto routine on this data block.
-			crypto(hash_mode, crypto_mode, enc_data, dec_data, lenght, key_result, iv, hash, hash_result);
+			crypto(hash_mode, crypto_mode, (npd->version == 4), enc_data, dec_data, lenght, key_result, iv, hash, hash_result);
 		}
 
 		// Apply additional compression if needed and write the decrypted data.
@@ -1005,7 +1005,7 @@ int sdata_check(unsigned char *key, SDAT_HEADER *sdat, NPD_HEADER *npd, FILE *f)
 	unsigned char header_iv[0x10] = {};
 
 	// Test the header hash (located at offset 0xA0).
-	crypto(hash_mode, crypto_mode, header, tmp, 0xA0, header_key, header_iv, key, hash_result);
+	crypto(hash_mode, crypto_mode, (npd->version == 4), header, tmp, 0xA0, header_key, header_iv, key, hash_result);
 
 	// Parse the metadata info.
 	int metadata_section_size = 0x10;
@@ -1029,7 +1029,7 @@ int sdata_check(unsigned char *key, SDAT_HEADER *sdat, NPD_HEADER *npd, FILE *f)
 		fread(data, block_size, 1, f);
 
 		// Generate the hash for this block.
-		crypto(hash_mode, crypto_mode, data, tmp, block_size, header_key, header_iv, key, hash_result);
+		crypto(hash_mode, crypto_mode, (npd->version == 4), data, tmp, block_size, header_key, header_iv, key, hash_result);
 
 		// TODO: Check the generated hash against the metadata hash located at offset 0x90 in the header.
 
