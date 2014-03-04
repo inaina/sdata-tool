@@ -46,10 +46,11 @@ void aesecb128_encrypt(unsigned char *key, unsigned char *in, unsigned char *out
 
 bool hmac_hash_compare(unsigned char *key, int key_len, unsigned char *in, int in_len, unsigned char *hash)
 {
-	unsigned char *out = new unsigned char[in_len];
+	unsigned char *out = new unsigned char[key_len];
 
 	sha1_hmac(key, key_len, in, in_len, out);
-	for (int i = 0; i < key_len; i++)
+
+	for (int i = 0; i < 0x10; i++)
 	{
 		if (out[i] != hash[i])
 		{
@@ -65,11 +66,11 @@ bool hmac_hash_compare(unsigned char *key, int key_len, unsigned char *in, int i
 
 bool cmac_hash_compare(unsigned char *key, int key_len, unsigned char *in, int in_len, unsigned char *hash)
 {
-	unsigned char *out = new unsigned char[in_len];
+	unsigned char *out = new unsigned char[key_len];
 
 	aes_context ctx;
 	aes_setkey_enc(&ctx, key, 128);
-	aes_cmac(&ctx, key_len, in, out);
+	aes_cmac(&ctx, in_len, in, out);
 
 	for (int i = 0; i < key_len; i++)
 	{
@@ -130,16 +131,20 @@ void generate_hash(int hash_mode, int version, unsigned char *hash_final, unsign
 	};
 }
 
-void crypto(int hash_mode, int crypto_mode, int version, unsigned char *in, unsigned char *out, int lenght, unsigned char *key, unsigned char *iv, unsigned char *hash, unsigned char *test_hash) 
+bool crypto(int hash_mode, int crypto_mode, int version, unsigned char *in, unsigned char *out, int lenght, unsigned char *key, unsigned char *iv, unsigned char *hash, unsigned char *test_hash) 
 {
 	// Setup buffers for key, iv and hash.
 	unsigned char key_final[0x10] = {};
 	unsigned char iv_final[0x10] = {};
-	unsigned char hash_final[0x10] = {};
+	unsigned char hash_final_10[0x10] = {};
+	unsigned char hash_final_14[0x14] = {};
 
 	// Generate crypto key and hash.
 	generate_key(crypto_mode, version, key_final, iv_final, key, iv);
-	generate_hash(hash_mode, version, hash_final, hash);
+	if ((hash_mode & 0xFF) == 0x01)
+		generate_hash(hash_mode, version, hash_final_14, hash);
+	else
+		generate_hash(hash_mode, version, hash_final_10, hash);
 
 	if ((crypto_mode & 0xFF) == 0x01)  // No algorithm.
 	{
@@ -152,23 +157,25 @@ void crypto(int hash_mode, int crypto_mode, int version, unsigned char *in, unsi
 	else
 	{
 		printf("ERROR: Unknown crypto algorithm!\n");
+		return false;
 	}
 
 	if ((hash_mode & 0xFF) == 0x01) // 0x14 SHA1-HMAC
 	{
-		hmac_hash_compare(hash_final, 0x14, in, lenght, test_hash);
+		return hmac_hash_compare(hash_final_14, 0x14, in, lenght, test_hash);
 	}
 	else if ((hash_mode & 0xFF) == 0x02)  // 0x10 AES-CMAC
 	{
-		cmac_hash_compare(hash_final, 0x10, in, lenght, test_hash);
+		return cmac_hash_compare(hash_final_10, 0x10, in, lenght, test_hash);
 	}
 	else if ((hash_mode & 0xFF) == 0x04) //0x10 SHA1-HMAC
 	{
-		hmac_hash_compare(hash_final, 0x10, in, lenght, test_hash);
+		return hmac_hash_compare(hash_final_10, 0x10, in, lenght, test_hash);
 	}
 	else
 	{
 		printf("ERROR: Unknown hashing algorithm!\n");
+		return false;
 	}
 }
 
@@ -912,11 +919,12 @@ int sdata_decrypt(FILE *in, FILE *out, SDAT_HEADER *sdat, NPD_HEADER *npd, unsig
 			// IV is null if NPD version is 1 or 0.
 			iv = (npd->version <= 1) ? empty_iv : npd->digest;
 			// Call main crypto routine on this data block.
-			crypto(hash_mode, crypto_mode, (npd->version == 4), enc_data, dec_data, lenght, key_result, iv, hash, hash_result);
+			if (!crypto(hash_mode, crypto_mode, (npd->version == 4), enc_data, dec_data, lenght, key_result, iv, hash, hash_result))
+				return 1;
 		}
 
 		// Apply additional compression if needed and write the decrypted data.
-		if ((sdat->flags & SDAT_COMPRESSED_FLAG) != 0) {
+		if (((sdat->flags & SDAT_COMPRESSED_FLAG) != 0) && compression_end) {
 			int decomp_size = (int)sdat->file_size;
 			unsigned char *decomp_data = new unsigned char[decomp_size];
 			memset(decomp_data, 0, decomp_size);
@@ -1005,7 +1013,8 @@ int sdata_check(unsigned char *key, SDAT_HEADER *sdat, NPD_HEADER *npd, FILE *f)
 	unsigned char header_iv[0x10] = {};
 
 	// Test the header hash (located at offset 0xA0).
-	crypto(hash_mode, crypto_mode, (npd->version == 4), header, tmp, 0xA0, header_key, header_iv, key, hash_result);
+	if (!crypto(hash_mode, crypto_mode, (npd->version == 4), header, tmp, 0xA0, header_key, header_iv, key, hash_result))
+		printf("WARNING: Header hash is invalid!\n");
 
 	// Parse the metadata info.
 	int metadata_section_size = 0x10;
@@ -1028,10 +1037,14 @@ int sdata_check(unsigned char *key, SDAT_HEADER *sdat, NPD_HEADER *npd, FILE *f)
 		tmp = new unsigned char[block_size];
 		fread(data, block_size, 1, f);
 
-		// Generate the hash for this block.
-		crypto(hash_mode, crypto_mode, (npd->version == 4), data, tmp, block_size, header_key, header_iv, key, hash_result);
+		// Check the generated hash against the metadata hash located at offset 0x90 in the header.
+		memset(hash_result, 0, 0x10);
+		fseek(f, 0x90, SEEK_SET);
+		fread(hash_result, 0x10, 1, f);
 
-		// TODO: Check the generated hash against the metadata hash located at offset 0x90 in the header.
+		// Generate the hash for this block.
+		if (!crypto(hash_mode, crypto_mode, (npd->version == 4), data, tmp, block_size, header_key, header_iv, key, hash_result))
+			printf("WARNING: Metadata hash from block 0x%08x is invalid!\n", metadata_offset + bytes_read);
 
 		// Adjust sizes.
 		bytes_read += block_size;
