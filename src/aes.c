@@ -859,8 +859,8 @@ int aes_crypt_ctr( aes_context *ctx,
     return( 0 );
 }
 
-//CMAC GLOBS
-#define AES_128 0
+/* AES-CMAC */
+
 unsigned char const_Rb[16] = {
 	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x87
@@ -869,30 +869,25 @@ unsigned char const_Zero[16] = {
 	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
 };
-//END
 
-/* AES-CMAC Generation Function */
-
-void leftshift_onebit(unsigned char *input,unsigned char *output)
+void leftshift_onebit(unsigned char *input, unsigned char *output)
 {
 	int i;
     unsigned char overflow = 0;
 
-	for ( i=15; i>=0; i-- ) 
+	for (i = 15; i >= 0; i--) 
 	{
 		output[i] = input[i] << 1;
 		output[i] |= overflow;
-		overflow = (input[i] & 0x80)?1:0;
+		overflow = (input[i] & 0x80) ? 1 : 0;
 	}
 }
 
 void xor_128(unsigned char *a, unsigned char *b, unsigned char *out)
 {
 	int i;
-	for (i=0;i<16; i++)
-	{
+	for (i = 0; i < 16; i++) 
 		out[i] = a[i] ^ b[i];
-	}
 }
 
 void generate_subkey(aes_context *ctx, unsigned char *K1, unsigned char *K2)
@@ -900,22 +895,21 @@ void generate_subkey(aes_context *ctx, unsigned char *K1, unsigned char *K2)
 	unsigned char L[16];
 	unsigned char Z[16];
 	unsigned char tmp[16];
-	int i;
-
-	for ( i=0; i<16; i++ ) Z[i] = 0;
-
 	
+	int i;
+	for (i = 0; i < 16; i++) Z[i] = 0;
+
 	aes_crypt_ecb(ctx, AES_ENCRYPT, Z, L);
 
-	if ( (L[0] & 0x80) == 0 ) /* If MSB(L) = 0, then K1 = L << 1 */
+	if ((L[0] & 0x80) == 0)
 	{
 		leftshift_onebit(L,K1);
-	} else {    /* Else K1 = ( L << 1 ) (+) Rb */
+	} else {
         leftshift_onebit(L,tmp);
         xor_128(tmp,const_Rb,K1);
     }
 
-	if ( (K1[0] & 0x80) == 0 ) 
+	if ((K1[0] & 0x80) == 0) 
 	{
         leftshift_onebit(K1,K2);
     } else {
@@ -924,64 +918,57 @@ void generate_subkey(aes_context *ctx, unsigned char *K1, unsigned char *K2)
     }
 }
 
-void padding ( unsigned char *lastb, unsigned char *pad, int length )
+void padding (unsigned char *lastb, unsigned char *pad, int length)
 {
-	int j;
-	
-	/* original last block */
-	for ( j=0; j<16; j++ ) 
+	int i;
+	for (i = 0; i < 16; i++) 
 	{
-		if ( j < length ) 
-		{
-            pad[j] = lastb[j];
-        } else if ( j == length ) {
-            pad[j] = 0x80;
-        } else {
-            pad[j] = 0x00;
-        }
+		if (i < length) 
+			pad[i] = lastb[i];
+        else if (i == length)
+            pad[i] = 0x80;
+        else
+            pad[i] = 0x00;
 	}
 }
 
-void aes_cmac (aes_context *ctx, size_t length, unsigned char *input, unsigned char *output)
+void aes_cmac(aes_context *ctx, int length, unsigned char *input, unsigned char *output)
 {
-    unsigned char X[16],Y[16], M_last[16], padded[16];
+    unsigned char X[16], Y[16], M_last[16], padded[16];
     unsigned char K1[16], K2[16];
     int n, i, flag;
-    generate_subkey(ctx,K1,K2);
+    generate_subkey(ctx, K1, K2);
 
-    n = (length+15) / 16;       /* n is number of rounds */
-
-    if ( n == 0 ) 
+    n = (length + 15) / 16;
+    if (n == 0) 
 	{
         n = 1;
         flag = 0;
     } else {
-		if ( (length%16) == 0 ) { /* last block is a complete block */
+		if ((length % 16) == 0)
             flag = 1;
-        } else { /* last block is not complete block */
-            flag = 0;
-        }
-
+		else
+			flag = 0;
     }
 
-    if ( flag ) { /* last block is complete block */
-        xor_128(&input[16*(n-1)],K1,M_last);
+    if (flag) 
+	{
+        xor_128(&input[16 * (n - 1)], K1, M_last);
     } else {
-        padding(&input[16*(n-1)],padded,length%16);
-        xor_128(padded,K2,M_last);
+        padding(&input[16 * (n - 1)], padded, length % 16);
+        xor_128(padded, K2, M_last);
     }
 
-    for ( i=0; i<16; i++ ) X[i] = 0;
-    for ( i=0; i<n-1; i++ ) 
+    for (i = 0; i < 16; i++) X[i] = 0;
+    for (i = 0; i < n - 1; i++) 
     {
-        xor_128(X,&input[16*i],Y); /* Y := Mi (+) X  */
-		aes_crypt_ecb(ctx, AES_ENCRYPT, Y, X); /* X := AES-128(KEY, Y); */ 
+        xor_128(X, &input[16*i], Y);
+		aes_crypt_ecb(ctx, AES_ENCRYPT, Y, X); 
     }
 
     xor_128(X,M_last,Y);
     aes_crypt_ecb(ctx, AES_ENCRYPT, Y, X);
 
-    for ( i=0; i<16; i++ ) {
-        output[i] = X[i];
-    }
+    for (i = 0; i < 16; i++)
+		output[i] = X[i];
 }
